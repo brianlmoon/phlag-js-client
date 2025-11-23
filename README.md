@@ -6,7 +6,7 @@
 
 **JavaScript/TypeScript client library for the Phlag feature flag management system**
 
-This library provides a simple, type-safe interface for querying feature flags from a [Phlag](https://github.com/moonspot/phlag) server. It handles authentication, environment management, error handling, and caching so you can focus on feature rollouts.
+This library provides a simple, type-safe interface for querying feature flags from a [Phlag](https://github.com/brianlmoon/phlag) server. It handles authentication, environment management, error handling, and caching so you can focus on feature rollouts.
 
 ## Features
 
