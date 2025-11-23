@@ -1,0 +1,34 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Override output directory - tests don't need to be compiled
+    "noEmit": true,
+    
+    // Allow importing from test files
+    "rootDir": ".",
+    
+    // Include DOM types for testing (vitest UI, etc.)
+    "lib": ["ES2020", "DOM"],
+    
+    // More lenient for test files
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    
+    // Allow test utilities to have implicit returns
+    "noImplicitReturns": false,
+    
+    // Tests can use 'any' when mocking
+    "noImplicitAny": false,
+    
+    // Allow test files to use Node.js resolution for better IDE support
+    "moduleResolution": "node"
+  },
+  "include": [
+    "tests/**/*",
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

@@ -1,0 +1,13 @@
+# Ignore node_modules if someone runs npm install in examples
+node_modules/
+
+# Ignore any compiled TypeScript files
+*.js.map
+
+# Ignore any cache files created by running examples
+*.json
+!package.json
+
+# Ignore environment files
+.env
+.env.local

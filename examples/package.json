@@ -1,0 +1,19 @@
+{
+  "name": "phlag-client-examples",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Examples for @moonspot/phlag-client",
+  "type": "module",
+  "scripts": {
+    "basic": "node basic.js",
+    "basic:ts": "npx tsx basic.ts",
+    "multi-env": "node multi-environment.js",
+    "caching": "node caching.js",
+    "cache-warming": "node cache-warming.js",
+    "error-handling": "node error-handling.js",
+    "config": "node configuration.js"
+  },
+  "keywords": [],
+  "author": "Brian Moon <brian@moonspot.net>",
+  "license": "BSD-3-Clause"
+}
