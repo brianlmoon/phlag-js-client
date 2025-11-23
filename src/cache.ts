@@ -8,7 +8,7 @@ declare const process: {
   };
 };
 
-declare function require(module: string): any;
+declare function require(module: string): Record<string, unknown>;
 
 /**
  * Utilities for file-based caching in Node.js
