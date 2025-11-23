@@ -19,14 +19,9 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { PhlagClient } from '../src/PhlagClient';
-import {
-  AuthenticationError,
-  InvalidEnvironmentError,
-  InvalidFlagError,
-} from '../src/exceptions';
+import { AuthenticationError, InvalidEnvironmentError, InvalidFlagError } from '../src/exceptions';
 
-const shouldRunIntegrationTests =
-  process.env.PHLAG_INTEGRATION_TEST === 'true';
+const shouldRunIntegrationTests = process.env.PHLAG_INTEGRATION_TEST === 'true';
 
 const skipIfNoServer = shouldRunIntegrationTests ? describe : describe.skip;
 
@@ -39,9 +34,7 @@ skipIfNoServer('Integration Tests (Real Phlag Server)', () => {
 
   beforeAll(() => {
     if (!apiKey) {
-      throw new Error(
-        'PHLAG_API_KEY environment variable must be set for integration tests'
-      );
+      throw new Error('PHLAG_API_KEY environment variable must be set for integration tests');
     }
 
     client = new PhlagClient({
@@ -61,10 +54,9 @@ skipIfNoServer('Integration Tests (Real Phlag Server)', () => {
         expect(result === null || typeof result === 'boolean').toBe(true);
       } catch (error) {
         // If it fails, it should be a known error type
-        expect(
-          error instanceof InvalidFlagError ||
-            error instanceof InvalidEnvironmentError
-        ).toBe(true);
+        expect(error instanceof InvalidFlagError || error instanceof InvalidEnvironmentError).toBe(
+          true
+        );
       }
     });
 
@@ -75,9 +67,7 @@ skipIfNoServer('Integration Tests (Real Phlag Server)', () => {
         environment,
       });
 
-      await expect(badClient.getFlag('any_flag')).rejects.toThrow(
-        AuthenticationError
-      );
+      await expect(badClient.getFlag('any_flag')).rejects.toThrow(AuthenticationError);
     });
 
     it('should handle invalid environment', async () => {
@@ -217,10 +207,9 @@ skipIfNoServer('Integration Tests (Real Phlag Server)', () => {
         await prodClient.getFlag('any_flag');
       } catch (error) {
         // Expect either success or known error types
-        expect(
-          error instanceof InvalidFlagError ||
-            error instanceof InvalidEnvironmentError
-        ).toBe(true);
+        expect(error instanceof InvalidFlagError || error instanceof InvalidEnvironmentError).toBe(
+          true
+        );
       }
     });
   });
