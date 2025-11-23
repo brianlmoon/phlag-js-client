@@ -8,7 +8,24 @@ declare const process: {
   };
 };
 
-declare function require(module: string): Record<string, unknown>;
+declare function require(module: 'crypto'): {
+  createHash: (algorithm: string) => {
+    update: (data: string) => {
+      digest: (encoding: string) => string;
+    };
+  };
+};
+
+declare function require(module: 'os'): {
+  tmpdir: () => string;
+};
+
+declare function require(module: 'fs/promises'): {
+  stat: (path: string) => Promise<{ mtimeMs: number }>;
+  readFile: (path: string, encoding: string) => Promise<string>;
+  writeFile: (path: string, data: string, encoding: string) => Promise<void>;
+  unlink: (path: string) => Promise<void>;
+};
 
 /**
  * Utilities for file-based caching in Node.js
