@@ -8,7 +8,7 @@ This is a JavaScript/TypeScript client library for the [Phlag](https://github.co
 **Language**: TypeScript (compiles to JavaScript ES modules)  
 **License**: BSD 3-Clause  
 **Author**: Brian Moon (brian@moonspot.net)  
-**Version**: 1.0.0 (Production Ready)
+**Version**: 0.2.0 (Preview - Multi-Environment Support)
 
 ## What is Phlag?
 
@@ -57,12 +57,12 @@ phlag-js-client/
 
 **1. PhlagClient** (src/PhlagClient.ts)
 - Main entry point for developers
-- Manages environment, caching, and flag retrieval
+- Manages environment(s), caching, and flag retrieval
 - Public methods:
   - `getFlag(name)` - Get any flag value
   - `isEnabled(name)` - Check boolean flags
-  - `getEnvironment()` - Get current environment
-  - `withEnvironment(env)` - Create new client for different environment
+  - `getEnvironment()` - Get current environment(s) (returns `string[]`)
+  - `withEnvironment(env)` - Create new client for different environment(s)
   - `warmCache()` - Preload cache
   - `clearCache()` - Clear cache
   - `isCacheEnabled()`, `getCacheFile()`, `getCacheTtl()` - Cache info
@@ -100,8 +100,91 @@ phlag-js-client/
 - Used internally for caching all flags
 
 **PhlagClientOptions**: Configuration interface
-- baseUrl, apiKey, environment (required)
+- baseUrl, apiKey, environment (required) - environment can be `string` or `string[]`
 - timeout, cache, cacheFile, cacheTtl (optional)
+
+## Multi-Environment Support (v2.0.0)
+
+### Overview
+
+Starting in v2.0.0, PhlagClient supports querying multiple environments with automatic fallback. This is primarily intended for development and QA environments where a developer's personal branch might not have all flags configured.
+
+### Usage
+
+```typescript
+// Single environment (traditional)
+const client = new PhlagClient({
+  baseUrl: 'http://localhost:8000',
+  apiKey: 'your-api-key',
+  environment: 'production'
+});
+
+// Multi-environment with fallback
+const devClient = new PhlagClient({
+  baseUrl: 'http://localhost:8000',
+  apiKey: 'your-api-key',
+  environment: ['my-branch', 'staging', 'development']
+});
+```
+
+### Fallback Behavior
+
+When multiple environments are configured:
+
+1. **Parallel Fetching**: All environments are queried simultaneously using `Promise.all()`
+2. **First Non-Null Wins**: The first environment returning a non-null value wins
+3. **Only Null Triggers Fallback**: `false`, `0`, and `""` are valid values and stop the fallback chain
+4. **Order Matters**: Environments are prioritized by their position in the array
+
+Example:
+```typescript
+// staging: feature_flag = false
+// development: feature_flag = true
+
+const value = await client.getFlag('feature_flag'); // returns false (not true)
+```
+
+### Breaking Change: getEnvironment()
+
+**In v1.x**: Returned `string`  
+**In v2.0**: Returns `string[]` (always an array)
+
+```typescript
+// v1.x
+client.getEnvironment(); // "production"
+
+// v2.0
+client.getEnvironment(); // ["production"]
+```
+
+### Caching with Multiple Environments
+
+When caching is enabled with multiple environments:
+
+1. **Initial Request**: Fetches `/all-flags/{env}` for each environment in parallel
+2. **Merging**: Results are merged with earlier environments taking precedence
+3. **Single Cache**: One unified cache stored in memory and on disk
+4. **Cache Filename**: Includes all environments in order (order matters for cache key)
+
+Example merge behavior:
+```typescript
+// staging: { feature_a: 'staging-value', feature_b: true }
+// development: { feature_a: 'dev-value', feature_c: 100 }
+
+// Merged cache:
+// { feature_a: 'staging-value', feature_b: true, feature_c: 100 }
+```
+
+### Performance
+
+**Without Caching:**
+- Single environment: 1 API call per `getFlag()`
+- Multi-environment: N parallel API calls per `getFlag()` (JavaScript advantage over PHP)
+
+**With Caching:**
+- Single environment: 1 API call on first request
+- Multi-environment: N parallel API calls on first request, then merged and cached
+- Subsequent requests: 0 API calls (in-memory lookup)
 
 ## API Endpoints Used
 
@@ -195,8 +278,8 @@ function isNodeEnvironment(): boolean {
 ## Testing
 
 **Test Framework**: Vitest (compatible with Jest API)
-**Test Count**: 55 passing tests across 3 suites
-**Coverage**: All public APIs and major error paths
+**Test Count**: 71 passing tests across 3 suites
+**Coverage**: All public APIs, multi-environment logic, and major error paths
 
 **Test Suites:**
 1. `Client.test.ts` (16 tests)
@@ -205,18 +288,20 @@ function isNodeEnvironment(): boolean {
    - Timeout handling
    - Subdirectory URL support
 
-2. `PhlagClient.test.ts` (24 tests)
-   - Flag retrieval
+2. `PhlagClient.test.ts` (34 tests)
+   - Flag retrieval (single and multi-environment)
    - isEnabled() convenience method
    - Environment switching
+   - Multi-environment fallback logic (7 new tests)
    - Error propagation
 
-3. `PhlagClient.cache.test.ts` (15 tests)
+3. `PhlagClient.cache.test.ts` (21 tests)
    - Cache initialization
    - First request vs subsequent
    - Cache warming/clearing
    - File persistence
    - Multi-instance sharing
+   - Multi-environment caching and merging (6 new tests)
 
 **Mocking Strategy:**
 - Global `fetch` is mocked via `vi.fn()`
@@ -288,13 +373,16 @@ This library mirrors the PHP client (`phlag-php-client`) in functionality:
 - Same error handling approach (specific exception types)
 - Same cache file naming (MD5 hash)
 - Same defaults (300s TTL, 10s timeout)
+- Both support multi-environment fallback (v2.0+)
 
 **Differences:**
 - Async API (JavaScript is async, PHP is sync)
 - Uses fetch instead of Guzzle
+- Parallel fetching for multi-environment (PHP fetches sequentially)
 - No require() at top-level (lazy loaded for Node.js modules)
 - camelCase instead of snake_case
 - Promise-based instead of direct returns
+- `getEnvironment()` returns array in both v2.0 versions
 
 ## Development Workflow
 
@@ -362,10 +450,19 @@ Based on the original plan, these were considered but not implemented:
 
 ## Version History
 
-**1.0.0** (2025-11-23)
-- Initial production release
-- Phase 1: Core functionality (HTTP client, PhlagClient, error handling)
-- Phase 2: Caching system (in-memory + file-based, cache management)
+**0.2.0** (2026-03-15) - Preview Release
+- **Breaking Change**: `getEnvironment()` now returns `string[]` instead of `string`
+- **New Feature**: Multi-environment fallback support
+- Constructor accepts `environment: string | string[]`
+- Parallel fetching for multi-environment queries
+- Cache merging with first environment taking precedence
+- 71 passing tests (16 new tests for multi-environment)
+- Updated documentation and migration guide
+
+**0.1.0** (2025-11-23) - Initial Preview Release
+- Initial preview release
+- Core functionality (HTTP client, PhlagClient, error handling)
+- Caching system (in-memory + file-based, cache management)
 - 55 passing tests
 - Complete TypeScript type definitions
 - Comprehensive documentation

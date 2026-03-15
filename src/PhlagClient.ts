@@ -51,7 +51,7 @@ import {
  */
 export class PhlagClient {
   private readonly client: Client;
-  private readonly environment: string;
+  private readonly environments: string[];
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly timeout: number;
@@ -62,23 +62,37 @@ export class PhlagClient {
   private flagCache: FlagCache | null = null;
 
   /**
-   * Creates a new Phlag client for a specific environment
+   * Creates a new Phlag client for one or more environments
    *
-   * The environment is set at construction time and all flag requests will
-   * use this environment. To query a different environment, create a new
-   * instance or use the withEnvironment() method.
+   * Single environment:
+   * ```typescript
+   * new PhlagClient({ environment: 'production', ... })
+   * ```
    *
-   * When caching is enabled, the client fetches all flags for the environment
-   * once using the /all-flags endpoint and serves subsequent requests from
-   * the cached data. In Node.js environments, the cache is also persisted to
-   * disk for cross-request persistence.
+   * Multiple environments with fallback (for dev/QA):
+   * ```typescript
+   * new PhlagClient({ environment: ['my-branch', 'staging'], ... })
+   * ```
+   *
+   * When multiple environments are configured, flag queries will check each
+   * environment in order until a non-null value is found. Only null triggers
+   * fallback - false, 0, and empty string are valid values that stop the chain.
+   *
+   * When caching is enabled with multiple environments, the client fetches all
+   * flags from each environment in parallel and merges them, with earlier
+   * environments taking precedence. Subsequent requests use the merged cache.
    *
    * @param options - Configuration options for the client
    */
   constructor(options: PhlagClientOptions) {
     this.baseUrl = options.baseUrl;
     this.apiKey = options.apiKey;
-    this.environment = options.environment;
+    
+    // Normalize environment to array
+    this.environments = Array.isArray(options.environment) 
+      ? options.environment 
+      : [options.environment];
+    
     this.timeout = options.timeout ?? 10000;
     this.cacheEnabled = options.cache ?? false;
     this.cacheTtl = options.cacheTtl ?? 300;
@@ -87,15 +101,15 @@ export class PhlagClient {
     // Check if we can use file-based caching (Node.js only)
     this.useFileCache = this.cacheEnabled && isNodeEnvironment();
 
-    // Generate cache filename
-    this.cacheFile = generateCacheFilename(this.baseUrl, this.environment, options.cacheFile);
+    // Generate cache filename (environments order matters for fallback priority)
+    this.cacheFile = generateCacheFilename(this.baseUrl, this.environments, options.cacheFile);
   }
 
   /**
    * Gets the value of a single feature flag
    *
    * This method retrieves the current value of a flag from the configured
-   * environment. The return type depends on the flag type:
+   * environment(s). The return type depends on the flag type:
    *
    * - SWITCH flags return boolean (true/false)
    * - INTEGER flags return number or null
@@ -106,9 +120,14 @@ export class PhlagClient {
    * environment, or are outside their temporal constraints (for non-SWITCH
    * types). SWITCH flags return false when inactive.
    *
+   * **Multi-environment fallback:**
+   * When multiple environments are configured, the client queries each
+   * environment in order until it finds a non-null value. Only null triggers
+   * fallback - false, 0, and empty string are valid values that stop the chain.
+   *
    * When caching is enabled, this method serves values from the in-memory
    * cache (populated on first request). When caching is disabled, each call
-   * makes a direct API request to /flag/{environment}/{name}.
+   * makes API requests to /flag/{environment}/{name}.
    *
    * @param name - The flag name
    * @returns The flag value (boolean, number, string, or null)
@@ -127,9 +146,32 @@ export class PhlagClient {
 
       return this.flagCache![name] ?? null;
     } else {
-      // Use direct API call
-      const endpoint = `flag/${this.environment}/${name}`;
-      return await this.client.get(endpoint);
+      // Use direct API calls with multi-environment fallback
+      if (this.environments.length === 1) {
+        // Single environment - direct call
+        const endpoint = `flag/${this.environments[0]}/${name}`;
+        return await this.client.get(endpoint);
+      } else {
+        // Multiple environments - fetch in parallel and apply fallback
+        const promises = this.environments.map((env) => {
+          const endpoint = `flag/${env}/${name}`;
+          return this.client.get(endpoint).catch((error) => {
+            // If any environment errors, let it bubble up
+            throw error;
+          });
+        });
+
+        const results = await Promise.all(promises);
+
+        // Return first non-null value
+        for (const value of results) {
+          if (value !== null) {
+            return value;
+          }
+        }
+
+        return null;
+      }
     }
   }
 
@@ -156,34 +198,53 @@ export class PhlagClient {
   }
 
   /**
-   * Gets the current environment name
+   * Gets the current environment name(s)
    *
-   * @returns The environment name
+   * Always returns an array, even for single environment configuration.
+   * This is a breaking change from v1.x which returned a string.
+   *
+   * @returns Array of environment names
+   *
+   * @example
+   * ```typescript
+   * const client = new PhlagClient({ environment: 'production', ... });
+   * client.getEnvironment(); // ['production']
+   *
+   * const multi = new PhlagClient({ environment: ['staging', 'dev'], ... });
+   * multi.getEnvironment(); // ['staging', 'dev']
+   * ```
    */
-  getEnvironment(): string {
-    return this.environment;
+  getEnvironment(): string[] {
+    return this.environments;
   }
 
   /**
-   * Creates a new client instance with a different environment
+   * Creates a new client instance with different environment(s)
    *
-   * This method returns a new PhlagClient instance configured for a different
-   * environment while reusing the same base URL and API key. This is useful
+   * This method returns a new PhlagClient instance configured for different
+   * environment(s) while reusing the same base URL and API key. This is useful
    * when you need to query multiple environments without maintaining multiple
    * client instances.
    *
    * The original client instance is not modified (immutable pattern). Cache
    * settings are preserved, but a new cache file is generated for the new
-   * environment to prevent cache collisions.
+   * environment(s) to prevent cache collisions.
    *
-   * @param environment - The new environment name
-   * @returns A new PhlagClient instance for the specified environment
+   * @param environments - Single environment or array of environments
+   * @returns A new PhlagClient instance for the specified environment(s)
+   *
+   * @example
+   * ```typescript
+   * const prod = new PhlagClient({ environment: 'production', ... });
+   * const staging = prod.withEnvironment('staging');
+   * const multi = prod.withEnvironment(['my-branch', 'staging']);
+   * ```
    */
-  withEnvironment(environment: string): PhlagClient {
+  withEnvironment(environments: string | string[]): PhlagClient {
     return new PhlagClient({
       baseUrl: this.baseUrl,
       apiKey: this.apiKey,
-      environment,
+      environment: environments,
       timeout: this.timeout,
       cache: this.cacheEnabled,
       cacheTtl: this.cacheTtl,
@@ -199,6 +260,11 @@ export class PhlagClient {
    * Otherwise, it fetches all flags from the API using the /all-flags
    * endpoint and writes the cache file.
    *
+   * **Multi-environment behavior:**
+   * When multiple environments are configured, fetches all flags from each
+   * environment in parallel and merges them. Earlier environments in the
+   * array take precedence for conflicting flag names.
+   *
    * Cache file write failures are logged but don't throw exceptions,
    * allowing graceful degradation to in-memory-only caching.
    */
@@ -213,8 +279,27 @@ export class PhlagClient {
     }
 
     // Cache miss or expired - fetch from API
-    const endpoint = `all-flags/${this.environment}`;
-    this.flagCache = await this.client.get(endpoint, true);
+    if (this.environments.length === 1) {
+      // Single environment - direct fetch
+      const endpoint = `all-flags/${this.environments[0]}`;
+      this.flagCache = await this.client.get(endpoint, true);
+    } else {
+      // Multiple environments - fetch in parallel and merge
+      const promises = this.environments.map((env) => {
+        const endpoint = `all-flags/${env}`;
+        return this.client.get(endpoint, true);
+      });
+
+      const results = await Promise.all(promises);
+
+      // Merge results: first environment takes precedence
+      // Start with empty object, then assign from last to first
+      // so first environment's values overwrite later ones
+      this.flagCache = {};
+      for (let i = results.length - 1; i >= 0; i--) {
+        Object.assign(this.flagCache, results[i]);
+      }
+    }
 
     // Write to cache file (Node.js only)
     if (this.useFileCache && this.flagCache) {

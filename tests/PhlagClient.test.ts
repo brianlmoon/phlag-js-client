@@ -32,7 +32,7 @@ describe('PhlagClient', () => {
   describe('constructor', () => {
     it('should create a client with required options', () => {
       expect(client).toBeDefined();
-      expect(client.getEnvironment()).toBe(environment);
+      expect(client.getEnvironment()).toEqual([environment]);
     });
 
     it('should use default timeout if not provided', () => {
@@ -231,7 +231,25 @@ describe('PhlagClient', () => {
 
   describe('getEnvironment', () => {
     it('should return the current environment', () => {
-      expect(client.getEnvironment()).toBe('production');
+      expect(client.getEnvironment()).toEqual(['production']);
+    });
+
+    it('should return array for single environment', () => {
+      const singleClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: 'production',
+      });
+      expect(singleClient.getEnvironment()).toEqual(['production']);
+    });
+
+    it('should return array for multiple environments', () => {
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+      });
+      expect(multiClient.getEnvironment()).toEqual(['staging', 'development']);
     });
   });
 
@@ -240,8 +258,16 @@ describe('PhlagClient', () => {
       const stagingClient = client.withEnvironment('staging');
 
       expect(stagingClient).not.toBe(client);
-      expect(stagingClient.getEnvironment()).toBe('staging');
-      expect(client.getEnvironment()).toBe('production');
+      expect(stagingClient.getEnvironment()).toEqual(['staging']);
+      expect(client.getEnvironment()).toEqual(['production']);
+    });
+
+    it('should accept array of environments', () => {
+      const multiClient = client.withEnvironment(['staging', 'dev']);
+
+      expect(multiClient).not.toBe(client);
+      expect(multiClient.getEnvironment()).toEqual(['staging', 'dev']);
+      expect(client.getEnvironment()).toEqual(['production']);
     });
 
     it('should preserve base URL and API key', async () => {
@@ -320,6 +346,214 @@ describe('PhlagClient', () => {
         'https://example.com/phlag/flag/production/test',
         expect.any(Object)
       );
+    });
+  });
+
+  describe('multi-environment fallback (without caching)', () => {
+    it('should query multiple environments in parallel', async () => {
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: false,
+      });
+
+      // Both environments return null, but fetch should be called for both
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'null',
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'null',
+        });
+
+      const result = await multiClient.getFlag('test_flag');
+
+      expect(result).toBeNull();
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/flag/staging/test_flag',
+        expect.any(Object)
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/flag/development/test_flag',
+        expect.any(Object)
+      );
+    });
+
+    it('should return first non-null value', async () => {
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development', 'production'],
+        cache: false,
+      });
+
+      // First returns null, second returns true, third returns false
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'null',
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'true',
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'false',
+        });
+
+      const result = await multiClient.getFlag('test_flag');
+
+      // Should return true from development (second env)
+      // All environments are fetched in parallel, but first non-null wins
+      expect(result).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('should NOT fallback on false (only null triggers fallback)', async () => {
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: false,
+      });
+
+      // First returns false, second returns true
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'false',
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'true',
+        });
+
+      const result = await multiClient.getFlag('test_flag');
+
+      // Should return false (not fallback to development)
+      expect(result).toBe(false);
+    });
+
+    it('should NOT fallback on 0 (only null triggers fallback)', async () => {
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: false,
+      });
+
+      // First returns 0, second returns 100
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => '0',
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => '100',
+        });
+
+      const result = await multiClient.getFlag('test_flag');
+
+      // Should return 0 (not fallback to development)
+      expect(result).toBe(0);
+    });
+
+    it('should NOT fallback on empty string (only null triggers fallback)', async () => {
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: false,
+      });
+
+      // First returns empty string, second returns "value"
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => '""',
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => '"value"',
+        });
+
+      const result = await multiClient.getFlag('test_flag');
+
+      // Should return empty string (not fallback to development)
+      expect(result).toBe('');
+    });
+
+    it('should return null when all environments return null', async () => {
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development', 'production'],
+        cache: false,
+      });
+
+      // All return null
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'null',
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'null',
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'null',
+        });
+
+      const result = await multiClient.getFlag('test_flag');
+
+      expect(result).toBeNull();
+      expect(fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('should propagate errors from any environment', async () => {
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: false,
+      });
+
+      // First returns null, second errors
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => 'null',
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 401,
+          text: async () => 'Unauthorized',
+        });
+
+      await expect(multiClient.getFlag('test_flag')).rejects.toThrow();
     });
   });
 });

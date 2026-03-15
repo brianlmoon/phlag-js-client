@@ -272,7 +272,7 @@ describe('PhlagClient with Caching', () => {
 
       const stagingClient = prodClient.withEnvironment('staging');
 
-      expect(stagingClient.getEnvironment()).toBe('staging');
+      expect(stagingClient.getEnvironment()).toEqual(['staging']);
       expect(stagingClient.isCacheEnabled()).toBe(true);
       expect(stagingClient.getCacheFile()).not.toBe(prodClient.getCacheFile());
     });
@@ -375,6 +375,222 @@ describe('PhlagClient with Caching', () => {
       // Should still be only 1 API call (from client1)
       expect(result).toBe(true);
       expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('multi-environment caching', () => {
+    it('should fetch all environments in parallel on first request', async () => {
+      const testCacheFile = `${tmpdir()}/phlag_test_parallel_${Date.now()}.json`;
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: true,
+        cacheFile: testCacheFile,
+      });
+
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            feature_one: true,
+            feature_two: 42,
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            feature_three: 'value',
+            feature_four: null,
+          }),
+        });
+
+      const result = await multiClient.getFlag('feature_one');
+
+      expect(result).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/all-flags/staging',
+        expect.any(Object)
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/all-flags/development',
+        expect.any(Object)
+      );
+      
+      // Cleanup
+      try {
+        await unlink(testCacheFile);
+      } catch {}
+    });
+
+    it('should merge caches with first environment taking precedence', async () => {
+      const testCacheFile = `${tmpdir()}/phlag_test_merge_${Date.now()}.json`;
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: true,
+        cacheFile: testCacheFile,
+      });
+
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            shared_flag: 'staging-value',
+            staging_only: true,
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            shared_flag: 'dev-value',
+            dev_only: 100,
+          }),
+        });
+
+      const sharedFlag = await multiClient.getFlag('shared_flag');
+      const stagingFlag = await multiClient.getFlag('staging_only');
+      const devFlag = await multiClient.getFlag('dev_only');
+
+      // First environment (staging) wins for conflicts
+      expect(sharedFlag).toBe('staging-value');
+      expect(stagingFlag).toBe(true);
+      expect(devFlag).toBe(100);
+      expect(fetch).toHaveBeenCalledTimes(2); // Only called once for initial load
+      
+      // Cleanup
+      try {
+        await unlink(testCacheFile);
+      } catch {}
+    });
+
+    it('should use cached data for subsequent requests', async () => {
+      const testCacheFile = `${tmpdir()}/phlag_test_cached_${Date.now()}.json`;
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: true,
+        cacheFile: testCacheFile,
+      });
+
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ flag1: true }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ flag2: false }),
+        });
+
+      await multiClient.getFlag('flag1');
+      await multiClient.getFlag('flag2');
+      await multiClient.getFlag('flag1');
+
+      // Should only call API twice (once per environment during initial load)
+      expect(fetch).toHaveBeenCalledTimes(2);
+      
+      // Cleanup
+      try {
+        await unlink(testCacheFile);
+      } catch {}
+    });
+
+    it('should return null for missing flags in all environments', async () => {
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: true,
+      });
+
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ existing_flag: true }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ another_flag: false }),
+        });
+
+      const result = await multiClient.getFlag('missing_flag');
+
+      expect(result).toBeNull();
+    });
+
+    it('should generate different cache files for different environment orders', () => {
+      const client1 = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: true,
+      });
+
+      const client2 = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['development', 'staging'],
+        cache: true,
+      });
+
+      // Different order = different priority = different cache
+      expect(client1.getCacheFile()).not.toBe(client2.getCacheFile());
+    });
+
+    it('should warm cache for all environments', async () => {
+      const testCacheFile = `${tmpdir()}/phlag_test_warm_${Date.now()}.json`;
+      const multiClient = new PhlagClient({
+        baseUrl,
+        apiKey,
+        environment: ['staging', 'development'],
+        cache: true,
+        cacheFile: testCacheFile,
+      });
+
+      (fetch as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ flag1: true }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ flag2: false }),
+        });
+
+      await multiClient.warmCache();
+
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/all-flags/staging',
+        expect.any(Object)
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/all-flags/development',
+        expect.any(Object)
+      );
+
+      // Subsequent call should not hit API
+      await multiClient.getFlag('flag1');
+      expect(fetch).toHaveBeenCalledTimes(2);
+      
+      // Cleanup
+      try {
+        await unlink(testCacheFile);
+      } catch {}
     });
   });
 });

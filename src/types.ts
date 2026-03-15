@@ -33,9 +33,23 @@ export interface PhlagClientOptions {
   apiKey: string;
 
   /**
-   * Environment name to query (e.g., production, staging, development)
+   * Environment name(s) to query
+   *
+   * Single environment:
+   * ```typescript
+   * environment: 'production'
+   * ```
+   *
+   * Multiple environments with fallback (for dev/QA):
+   * ```typescript
+   * environment: ['my-branch', 'staging', 'development']
+   * ```
+   *
+   * When multiple environments are configured, the client queries each
+   * environment in order until it finds a non-null value. Only null
+   * triggers fallback - false, 0, and empty string are valid values.
    */
-  environment: string;
+  environment: string | string[];
 
   /**
    * Request timeout in milliseconds (default: 10000)

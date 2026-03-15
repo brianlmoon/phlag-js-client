@@ -12,11 +12,12 @@ This library provides a simple, type-safe interface for querying feature flags f
 
 - 🎯 **Type-safe flag retrieval** - Get boolean, number, or string values with full TypeScript support
 - 🌐 **Environment-aware** - Configure once, query a specific environment
+- 🔄 **Multi-environment fallback** - Query multiple environments with automatic fallback (v0.2.0+)
 - 🔄 **Immutable environment switching** - Easy multi-environment queries
 - ⚡ **Simple API** - Clean, fluent interface with convenience methods
 - 🛡️ **Robust error handling** - Specific exceptions for different error conditions
 - 💾 **Built-in caching** - Optional file-based (Node.js) and in-memory caching
-- ✅ **Fully tested** - Comprehensive test coverage with Vitest (55 passing tests)
+- ✅ **Fully tested** - Comprehensive test coverage with Vitest
 
 ## Requirements
 
@@ -163,7 +164,7 @@ Creates a new client instance.
 **Parameters:**
 - `options.baseUrl` - Base URL of your Phlag server (e.g., `http://localhost:8000`)
 - `options.apiKey` - 64-character API key from the Phlag admin panel
-- `options.environment` - Environment name (e.g., `production`, `staging`, `development`)
+- `options.environment` - Environment name or array of environments for fallback (e.g., `'production'` or `['my-branch', 'staging']`)
 - `options.timeout` - Request timeout in milliseconds (default: `10000`)
 - `options.cache` - Enable caching (default: `false`)
 - `options.cacheFile` - Custom cache file path (default: auto-generated in temp dir)
@@ -188,13 +189,19 @@ Convenience method for checking SWITCH flags.
 
 **Returns:** `true` if the flag value is boolean `true`, `false` otherwise
 
-#### `getEnvironment(): string`
+#### `getEnvironment(): string[]`
 
-Gets the current environment name.
+Gets the current environment(s) as an array.
 
-#### `withEnvironment(environment: string): PhlagClient`
+**Returns:** Always returns an array, even for single environments
+- Single environment: `['production']`
+- Multiple environments: `['my-branch', 'staging', 'development']`
 
-Creates a new client for a different environment (immutable pattern).
+**Note:** In v1.x this returned a string. See migration notes below.
+
+#### `withEnvironment(environment: string | string[]): PhlagClient`
+
+Creates a new client for a different environment or environment chain (immutable pattern).
 
 #### `async warmCache(): Promise<void>`
 
@@ -249,6 +256,123 @@ try {
 
 All exceptions extend `PhlagError`, so you can catch them all with a single block if needed.
 
+## Multi-Environment Fallback
+
+**New in v0.2.0:** Query multiple environments with automatic fallback. Perfect for dev/QA workflows where you want to test branch-specific flags with fallback to shared environments.
+
+### How it Works
+
+When you configure multiple environments, the client queries them in order and returns the first **non-null** value:
+
+```typescript
+const client = new PhlagClient({
+  baseUrl: 'http://phlag.example.com',
+  apiKey: 'your-api-key',
+  environment: ['my-feature-branch', 'staging', 'development'],
+});
+
+// Queries environments in order:
+// 1. Check 'my-feature-branch' first
+// 2. If null, check 'staging'
+// 3. If still null, check 'development'
+const value = await client.getFlag('new_checkout_flow');
+```
+
+**Important:** Only `null` triggers the fallback. Valid values like `false`, `0`, or `""` will NOT fall through:
+
+```typescript
+// Example flag states across environments:
+// my-feature-branch: null (flag not set)
+// staging: false (flag explicitly disabled)
+// development: true (flag enabled)
+
+// Result: false (from staging, stops there)
+const enabled = await client.isEnabled('feature_beta');
+```
+
+### Use Cases
+
+**Branch-specific development:**
+```typescript
+// Test your branch's flags, fall back to staging for unset flags
+const client = new PhlagClient({
+  baseUrl: 'http://localhost:8000',
+  apiKey: 'dev-api-key',
+  environment: ['feature-new-checkout', 'staging'],
+});
+```
+
+**QA testing with overrides:**
+```typescript
+// QA environment with fallback to production
+const client = new PhlagClient({
+  baseUrl: 'http://phlag.example.com',
+  apiKey: 'api-key',
+  environment: ['qa-overrides', 'production'],
+  cache: true,
+});
+```
+
+**Gradual rollout testing:**
+```typescript
+// Test canary deployment flags with production fallback
+const client = new PhlagClient({
+  baseUrl: 'http://phlag.example.com',
+  apiKey: 'api-key',
+  environment: ['canary', 'production'],
+});
+```
+
+### Performance with Multiple Environments
+
+**Without caching:**
+- Queries environments in parallel using `Promise.all()`
+- Returns as soon as first non-null value found
+- Network overhead: max(environment response times)
+
+**With caching:**
+- Fetches ALL environments' flags in parallel on first request
+- Merges caches with first environment taking precedence
+- Subsequent requests: <1ms (memory lookup)
+
+```typescript
+const client = new PhlagClient({
+  baseUrl: 'http://phlag.example.com',
+  apiKey: 'api-key',
+  environment: ['branch-123', 'staging', 'dev'],
+  cache: true,
+  cacheTtl: 300,
+});
+
+// First request: Fetches all 3 environments in parallel (1 round trip)
+const value1 = await client.getFlag('feature_a');
+
+// Subsequent requests: Pure memory lookup
+const value2 = await client.getFlag('feature_b');
+```
+
+### Checking Current Environment(s)
+
+```typescript
+const client = new PhlagClient({
+  baseUrl: 'http://phlag.example.com',
+  apiKey: 'api-key',
+  environment: ['my-branch', 'staging'],
+});
+
+// v0.2.0: Always returns array
+console.log(client.getEnvironment());  // ['my-branch', 'staging']
+
+// Single environment still returns array
+const prodClient = new PhlagClient({
+  baseUrl: 'http://phlag.example.com',
+  apiKey: 'api-key',
+  environment: 'production',
+});
+
+console.log(prodClient.getEnvironment());  // ['production']
+```
+
 ## Working with Multiple Environments
 
 You can switch environments without creating new client instances:
@@ -265,13 +389,62 @@ const prodClient = new PhlagClient({
 const stagingClient = prodClient.withEnvironment('staging');
 
 // Each has its own cache
-console.log(prodClient.getEnvironment());    // "production"
-console.log(stagingClient.getEnvironment()); // "staging"
+console.log(prodClient.getEnvironment());    // ['production']
+console.log(stagingClient.getEnvironment()); // ['staging']
 
 // Query both environments
 const prodEnabled = await prodClient.isEnabled('feature_beta');
 const stagingEnabled = await stagingClient.isEnabled('feature_beta');
+
+// Switch to multi-environment fallback
+const devClient = prodClient.withEnvironment(['my-branch', 'staging', 'dev']);
+console.log(devClient.getEnvironment());  // ['my-branch', 'staging', 'dev']
 ```
+
+## Migration from v0.1.x to v0.2.0
+
+### Breaking Change: getEnvironment() Return Type
+
+**v1.x:**
+```typescript
+const env = client.getEnvironment();  // Returns: 'production' (string)
+```
+
+**v0.2.0:**
+```typescript
+const env = client.getEnvironment();  // Returns: ['production'] (string[])
+```
+
+**Migration:**
+
+If you're checking the environment name:
+```typescript
+// v1.x
+if (client.getEnvironment() === 'production') { ... }
+
+// v0.2.0 - Option 1: Check first element
+if (client.getEnvironment()[0] === 'production') { ... }
+
+// v0.2.0 - Option 2: Check if array includes value
+if (client.getEnvironment().includes('production')) { ... }
+```
+
+If you're logging the environment:
+```typescript
+// v1.x
+console.log('Environment:', client.getEnvironment());  // "production"
+
+// v0.2.0
+console.log('Environment:', client.getEnvironment());  // ["production"]
+console.log('Environment:', client.getEnvironment().join(', '));  // "production"
+```
+
+### New Features in v0.2.0
+
+- ✅ Multi-environment fallback support
+- ✅ Parallel environment queries for better performance
+- ✅ `withEnvironment()` now accepts string arrays
+- ✅ Improved caching for multi-environment scenarios
 
 ## Development
 
@@ -289,22 +462,23 @@ npm test
 
 ## Project Status
 
-This library is **production-ready** with both Phase 1 and Phase 2 complete:
+This library is **production-ready** and actively maintained:
 
-**Phase 1 - Core Functionality:**
+**Version 0.2.0** (Current)
+- ✅ Multi-environment fallback support
+- ✅ Parallel environment queries
+- ✅ Enhanced caching for multiple environments
+- ✅ Breaking change: `getEnvironment()` returns `string[]`
+
+**Version 1.0.0**
 - ✅ TypeScript project setup
 - ✅ HTTP client with fetch API
 - ✅ Error handling with specific exception types
 - ✅ PhlagClient with getFlag() and isEnabled()
+- ✅ In-memory & file-based caching (Node.js)
+- ✅ Cache management methods
 - ✅ Comprehensive test suite
 - ✅ TypeScript type definitions
-
-**Phase 2 - Caching:**
-- ✅ In-memory caching
-- ✅ File-based caching (Node.js)
-- ✅ Cache management methods
-- ✅ TTL configuration
-- ✅ Cache tests
 
 ## Troubleshooting
 

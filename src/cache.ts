@@ -35,20 +35,24 @@ declare function require(module: 'fs/promises'): {
  */
 
 /**
- * Generates a cache filename based on base URL and environment
+ * Generates a cache filename based on base URL and environment(s)
  *
  * The filename is generated using an MD5 hash of the base URL and
- * environment name to ensure uniqueness across different Phlag servers
+ * environment name(s) to ensure uniqueness across different Phlag servers
  * and environments. The file is placed in the system temp directory.
  *
+ * For multiple environments, the order matters since it reflects fallback
+ * priority. Different orders will generate different cache files:
+ * - ['staging', 'dev'] ≠ ['dev', 'staging']
+ *
  * @param baseUrl - The Phlag server base URL
- * @param environment - The environment name
+ * @param environments - Single environment string or array of environments
  * @param customPath - Optional custom cache file path
  * @returns The absolute path to the cache file
  */
 export function generateCacheFilename(
   baseUrl: string,
-  environment: string,
+  environments: string | string[],
   customPath?: string
 ): string {
   if (customPath) {
@@ -59,7 +63,13 @@ export function generateCacheFilename(
   const crypto = require('crypto');
   const os = require('os');
 
-  const hash = crypto.createHash('md5').update(`${baseUrl}|${environment}`).digest('hex');
+  // Normalize to array for consistent hashing
+  const envArray = Array.isArray(environments) ? environments : [environments];
+  
+  // Create hash input: baseUrl|env1|env2|env3...
+  const hashInput = `${baseUrl}|${envArray.join('|')}`;
+  const hash = crypto.createHash('md5').update(hashInput).digest('hex');
+  
   return `${os.tmpdir()}/phlag_cache_${hash}.json`;
 }
 
